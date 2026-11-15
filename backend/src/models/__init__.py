@@ -14,6 +14,13 @@ from src.models.rule import Rule  # noqa: E402
 from src.models.snapshot import Snapshot  # noqa: E402
 from src.models.run import Run  # noqa: E402
 from src.models.advice import Advice  # noqa: E402
+from src.models.order import (  # noqa: E402
+    Order,
+    OrderAllocation,
+    OrderDiscount,
+    OrderItem,
+    RefundEvent,
+)
 
 __all__ = [
     "Base",
@@ -25,4 +32,9 @@ __all__ = [
     "Snapshot",
     "Run",
     "Advice",
+    "Order",
+    "OrderItem",
+    "OrderDiscount",
+    "OrderAllocation",
+    "RefundEvent",
 ]

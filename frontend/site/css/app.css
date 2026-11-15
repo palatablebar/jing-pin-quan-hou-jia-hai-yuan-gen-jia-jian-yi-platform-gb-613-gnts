@@ -1665,3 +1665,79 @@ table.data tbody tr.best-row {
     align-items: flex-start;
   }
 }
+
+/* ---------- 订单整单分摊 / 回冲 ---------- */
+.alloc-card {
+  border: 1px solid var(--rule);
+  background: var(--tag-paper);
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 6px;
+}
+
+.alloc-card .ac2-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.alloc-card .ac2-head b {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+.alloc-card .ac2-head .money {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.sample-block {
+  border: 1px dashed var(--rule-strong);
+  background: var(--paper-2);
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 6px;
+}
+
+.sample-block .sb-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sample-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: var(--fs-sm);
+}
+
+.sample-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.sample-list li .money {
+  margin-left: auto;
+}
+
+.money.deviation {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.stat-strip .stat .v.deviation {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .alloc-card .ac2-head .money {
+    margin-left: 0;
+  }
+}

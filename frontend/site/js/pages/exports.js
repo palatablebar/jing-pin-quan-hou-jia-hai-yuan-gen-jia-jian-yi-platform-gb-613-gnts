@@ -16,6 +16,12 @@ const ACTIONS = {
   'advice.decide': '审批建议',
   'export.advices': '导出建议',
   'export.snapshots': '导出快照',
+  'export.allocations': '导出整单分摊明细',
+  'export.refunds': '导出回款变更流水',
+  'export.reconciliations': '导出整单对账报表',
+  'order.capture': '订单入库结算',
+  'order.refund': '追加回款变更',
+  'order.resettle': '重跑订单对账',
   'http.mutation': '写请求',
 };
 
@@ -36,6 +42,30 @@ function exportCards(isAdmin) {
       path: '/api/exports/snapshots.csv',
       file: 'pricewatch-snapshots.csv',
       meta: 'snapshots.csv',
+    },
+    {
+      id: 'export-allocations',
+      title: '订单整单分摊明细',
+      desc: '每笔整单优惠 × 每个货号一行：分摊权重、分摊到本行、券后净额/单价、已回冲与剩余分摊，用于逐笔核对。',
+      path: '/api/exports/allocations.csv',
+      file: 'pricewatch-order-allocations.csv',
+      meta: 'allocations.csv',
+    },
+    {
+      id: 'export-refunds',
+      title: '回款变更流水',
+      desc: '退款事件的业务发生时间、到达序号与回放序、实退金额、按分摊口径的回冲金额与差额。',
+      path: '/api/exports/refunds.csv',
+      file: 'pricewatch-refunds.csv',
+      meta: 'refunds.csv',
+    },
+    {
+      id: 'export-reconciliations',
+      title: '整单对账报表',
+      desc: '每张订单的成交额、整单优惠、实付、已回冲、剩余净额，以及旧口径逐行全额抵扣造成的偏差。',
+      path: '/api/exports/reconciliations.csv',
+      file: 'pricewatch-reconciliations.csv',
+      meta: 'reconciliations.csv',
     },
     {
       id: 'export-runs',

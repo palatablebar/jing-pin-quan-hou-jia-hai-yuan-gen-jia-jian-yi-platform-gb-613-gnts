@@ -15,10 +15,21 @@ from src.models.rule import Rule
 from src.models.run import Run
 from src.models.sku import Sku
 from src.models.snapshot import Snapshot
-from src.services import advice_service, effective_price, follow_advice, rule_service, run_service
+from src.services import advice_service, effective_price, follow_advice, order_service, rule_service, run_service
 from src.utils.timeutil import utcnow
 
 CAPTURE_WINDOW_DAYS = 3
+
+
+def _order_samples(db: Session, skus: list[Sku], captured_on: date) -> dict[int, list[dict]]:
+    """按货号取近 3 天「已对账通过」订单的分摊券后单价，作为跟价建议的首选可比依据。"""
+    by_code = order_service.comparable_samples_bulk(db, as_of=captured_on, days=CAPTURE_WINDOW_DAYS)
+    samples: dict[int, list[dict]] = {}
+    for sku in skus:
+        rows = by_code.get(sku.sku_code)
+        if rows:
+            samples[sku.id] = rows
+    return samples
 
 
 def _load_window(db: Session, captured_on: date) -> list[Snapshot]:
@@ -32,11 +43,23 @@ def _load_window(db: Session, captured_on: date) -> list[Snapshot]:
     )
 
 
-def _upsert_advice(db: Session, run: Run, existing: dict[int, Advice], sku: Sku, snapshot: Snapshot, result: dict) -> Advice:
+def _upsert_advice(
+    db: Session,
+    run: Run,
+    existing: dict[int, Advice],
+    sku: Sku,
+    snapshot: Snapshot,
+    result: dict,
+    *,
+    sample_basis: str,
+    order_samples: list[dict] | None = None,
+) -> Advice:
     advice = existing.get(sku.id)
     payload = {
         "algorithm": "B.follow_advice",
         "effective_algorithm": "A.effective_price",
+        "sample_basis": sample_basis,
+        "order_samples": order_samples or [],
         "current_price": round(sku.current_price, 2),
         "cost": round(sku.cost, 2),
         "floor_price": round(sku.floor_price, 2),
@@ -122,6 +145,7 @@ def execute(db: Session, run: Run, captured_on: date, competitor_filter: int | N
     skus = {row.id: row for row in db.scalars(select(Sku)).all()}
     competitors = {row.id: row for row in db.scalars(select(Competitor)).all()}
     rules = rule_service.effective_rules(db)
+    order_samples = _order_samples(db, list(skus.values()), captured_on)
 
     prices_by_sku: dict[int, list[float]] = {}
     invalid = 0
@@ -155,6 +179,8 @@ def execute(db: Session, run: Run, captured_on: date, competitor_filter: int | N
         for row in db.scalars(select(Advice).where(Advice.run_id == run.id)).all()
     }
     advice_count = 0
+    order_based = 0
+    snapshot_based = 0
     risk_bucket = {"high": 0, "medium": 0, "low": 0}
     gaps: list[float] = []
     discounts: list[float] = []
@@ -162,7 +188,15 @@ def execute(db: Session, run: Run, captured_on: date, competitor_filter: int | N
         sku = skus[snapshot.sku_id]
         competitor = competitors.get(snapshot.competitor_id)
         rule = rule_service.match_rule(rules, sku, competitor.code if competitor else None)
-        prices = prices_by_sku.get(sku.id, [])
+        samples = order_samples.get(sku.id) or []
+        if samples:
+            # 首选：已对账通过订单按货号成交金额分摊整单优惠后的券后单价
+            prices = [float(sample["unit_price"]) for sample in samples if float(sample["unit_price"]) > 0]
+            sample_basis = "order"
+        else:
+            # 回退：RPA 抓价快照的券后单件价（未参与整单分摊，仅作兜底）
+            prices = prices_by_sku.get(sku.id, [])
+            sample_basis = "snapshot"
         if not prices:
             continue
         try:
@@ -179,12 +213,34 @@ def execute(db: Session, run: Run, captured_on: date, competitor_filter: int | N
             invalid += 1
             continue
         result["rule_code"] = rule.code
+        basis_note = (
+            "样本口径：已对账通过订单按货号成交金额分摊整单优惠后的券后价"
+            if sample_basis == "order"
+            else "样本口径：抓价快照券后价（该 SKU 近 3 天无对账通过订单）"
+        )
+        result["reasons"].append(basis_note)
+        result["reason"] = result["reason"] + (
+            f"样本来自 {'订单分摊券后价' if sample_basis == 'order' else '抓价快照券后价'}（{len(prices)} 条）。"
+        )
         if (snapshot.effective or {}).get("discount_pct"):
             discounts.append(float(snapshot.effective["discount_pct"]))
         if not result["need_follow"]:
             continue
-        _upsert_advice(db, run, existing, sku, snapshot, result)
+        _upsert_advice(
+            db,
+            run,
+            existing,
+            sku,
+            snapshot,
+            result,
+            sample_basis=sample_basis,
+            order_samples=samples,
+        )
         advice_count += 1
+        if sample_basis == "order":
+            order_based += 1
+        else:
+            snapshot_based += 1
         risk_bucket[result["risk"]] = risk_bucket.get(result["risk"], 0) + 1
         gaps.append(result["gap_pct"])
 
@@ -208,11 +264,15 @@ def execute(db: Session, run: Run, captured_on: date, competitor_filter: int | N
         "rules_applied": len({rule.code for rule in rules}),
         "window_days": CAPTURE_WINDOW_DAYS,
         "captured_on": captured_on.isoformat(),
+        "order_based_advices": order_based,
+        "snapshot_based_advices": snapshot_based,
+        "comparable_order_skus": len(order_samples),
     }
     log = (
         f"[{captured_on.isoformat()}] 回放窗口 {CAPTURE_WINDOW_DAYS} 天，快照 {len(window)} 条；"
         f"当日待测算 {len(targets)} 条 SKU；券后价还原失败 {invalid} 条；"
         f"生成跟价建议 {advice_count} 条（高 {risk_bucket.get('high', 0)} / 中 {risk_bucket.get('medium', 0)} / 低 {risk_bucket.get('low', 0)}）；"
+        f"其中订单分摊样本 {order_based} 条、快照兜底 {snapshot_based} 条；"
         f"平均价差 {metrics['avg_gap_pct']}%，平均券后折扣 {metrics['avg_discount_pct']}%。"
     )
     status = "success" if metrics["snapshots"] > 0 else "partial"

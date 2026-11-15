@@ -17,15 +17,41 @@ function snapshotBlock(payload) {
   ])}`;
 }
 
+function sampleBlock(payload) {
+  const basis = payload.sample_basis || 'snapshot';
+  const samples = payload.order_samples || [];
+  const label = ENUMS.sampleBasis[basis] || basis;
+  const rows = samples
+    .map(
+      (sample) => `<li><span class="mono">${esc(sample.order_no)} L${esc(sample.line_no)}</span>
+        <span class="muted tiny">${esc(sample.paid_on)} · 剩余 ${esc(sample.qty)} 件 · 分摊 ${money(sample.discount_allocated)}</span>
+        <b class="money">${money(sample.unit_price)}</b></li>`,
+    )
+    .join('');
+  return `<div class="sample-block">
+    <div class="sb-head">
+      <span class="badge ${basis === 'order' ? 'ok' : 'info'}">样本口径 · ${esc(label)}</span>
+      <span class="mono muted">${esc(payload.samples || 0)} 条样本</span>
+    </div>
+    ${
+      basis === 'order'
+        ? `<p class="muted tiny">只取「整单分摊与订单实付对账通过」的订单，按货号成交金额分摊整单优惠后的券后单价；回冲后的剩余件数才进样本。</p>
+           <ol class="sample-list">${rows}</ol>`
+        : '<p class="muted tiny">该 SKU 近 3 天没有对账通过的订单样本，回退到 RPA 抓价快照券后价；快照不参与整单分摊。</p>'
+    }
+  </div>`;
+}
+
 function ruleBlock(payload) {
   const masked = payload.cost_floor === undefined;
+  const sampleUnit = payload.sample_basis === 'order' ? '条订单样本' : '次抓价';
   return `${kv([
     ['跟价策略', esc(payload.rule || '—')],
     ['成本底线', masked ? '<span class="masked">脱敏</span>' : `<span class="money">${money(payload.cost_floor)}</span>`],
     ['市价上限', `<span class="money">${money(payload.market_cap)}</span>（P25×1.02 与当前价取小）`],
     ['约束命中', esc(payload.clamped_by || '无（按市价跟随）')],
     ['破底价', payload.breach ? '<span class="badge high">是</span>' : '<span class="badge low">否</span>'],
-    ['样本数', `${esc(payload.samples || 0)} 次抓价`],
+    ['样本数', `${esc(payload.samples || 0)} ${sampleUnit}`],
   ])}
   <ul class="reason-list">${(payload.reasons || []).map((reason) => `<li>${esc(reason)}</li>`).join('')}</ul>`;
 }
@@ -61,6 +87,8 @@ function openAdvice(view, ctx, advice) {
         ['审批人', esc(advice.approver || '—')],
         ['审批备注', esc(advice.decide_note || '—')],
       ])}
+      <div class="section-label">跟价样本口径（订单分摊 vs 抓价快照）</div>
+      ${sampleBlock(advice.payload || {})}
       <div class="section-label">算法 B 明细（P25 锚点 / 底价约束）</div>
       ${ruleBlock(advice.payload || {})}
       <div class="section-label">算法 A 明细（这条建议依据的快照）</div>
@@ -125,7 +153,14 @@ export const advicesPage = {
               render: (row) =>
                 `<b>${esc(row.sku_name)}</b><div class="mono muted">${esc(row.sku_code)} · ${esc(row.rule_code)}</div>`,
             },
-            { key: 'p25', label: '竞品 P25', className: 'num money', render: (row) => money(row.p25) },
+            {
+              key: 'p25',
+              label: '竞品 P25',
+              className: 'num',
+              render: (row) => `<b class="money">${money(row.p25)}</b><div class="muted tiny">${
+                row.payload?.sample_basis === 'order' ? '订单分摊' : '抓价快照'
+              }</div>`,
+            },
             { key: 'current_price', label: '当前价', className: 'num money', render: (row) => money(row.current_price) },
             {
               key: 'suggested_price',

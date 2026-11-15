@@ -1,4 +1,4 @@
-"""幂等 seed：3 账号 / 6 竞品 / 320 SKU / 5 规则 / 960 快照 / 1 次测算（42 条建议）。
+"""幂等 seed：3 账号 / 6 竞品 / 320 SKU / 5 规则 / 960 快照 / 5 张订单 / 1 次测算（42 条建议）。
 
 自然键 upsert：
   users.email
@@ -6,6 +6,7 @@
   skus.sku_code
   rules.code
   snapshots(sku_id, captured_on)
+  orders.order_no
   runs.seed_key
   advices(run_id, sku_id)
   audit_logs.seed_key
@@ -18,19 +19,6 @@ from datetime import date, timedelta
 
 from sqlalchemy import func, select
 
-from src.config.database import session_scope
-from src.models.advice import Advice
-from src.models.audit import AuditLog
-from src.models.competitor import Competitor
-from src.models.rule import Rule
-from src.models.run import Run
-from src.models.sku import Sku
-from src.models.snapshot import Snapshot
-from src.models.user import User
-from src.services import effective_price, pricing_service
-from src.utils.security import hash_password
-from src.utils.timeutil import local_now, utcnow
-
 from scripts.demo_config import (
     BRAND,
     CAPTURE_DAYS,
@@ -40,6 +28,18 @@ from scripts.demo_config import (
     SHOWPIECE_CODE,
     build_dataset,
 )
+from src.config.database import session_scope
+from src.models.advice import Advice
+from src.models.audit import AuditLog
+from src.models.competitor import Competitor
+from src.models.rule import Rule
+from src.models.run import Run
+from src.models.sku import Sku
+from src.models.snapshot import Snapshot
+from src.models.user import User
+from src.services import effective_price, order_service, pricing_service
+from src.utils.security import hash_password
+from src.utils.timeutil import local_now, utcnow
 
 
 def ensure_users(db) -> int:
@@ -178,6 +178,59 @@ def ensure_run(db, today: date) -> Run:
     )
 
 
+def ensure_orders(db, specs: list[dict], skus: dict[str, Sku], competitors: dict[str, Competitor], today: date) -> int:
+    """幂等写入订单样例：同一订单号已存在则跳过（不覆盖已回冲的退款事件）。"""
+    from src.models.order import Order
+
+    for spec in specs:
+        if db.scalar(select(Order).where(Order.order_no == spec["order_no"])) is not None:
+            continue
+        competitor = competitors.get(spec.get("competitor_code") or "")
+        first = skus.get(spec["items"][0]["sku_code"]) if spec.get("items") else None
+        if first is None or competitor is None:
+            continue
+        seed_key = spec.get("seed_key")
+        items = []
+        for raw in spec["items"]:
+            target = skus.get(raw["sku_code"])
+            if target is None:
+                break
+            items.append(
+                {
+                    "line_no": len(items) + 1,
+                    "sku_code": target.sku_code,
+                    "qty": raw["qty"],
+                    "unit_price": raw["unit_price"],
+                }
+            )
+        else:
+            paid_on = (today - timedelta(days=spec.get("paid_on_offset", 0))).isoformat() + f"T{spec.get('paid_hour', 10):02d}:00:00"
+            refunds = []
+            for raw in spec.get("refunds") or []:
+                occurred = (today - timedelta(days=raw.get("occurred_offset", 0))).isoformat() + f"T{raw.get('occurred_hour', 10):02d}:00:00"
+                refunds.append({**raw, "occurred_at": occurred})
+            order_service.create_order(
+                db,
+                {
+                    "order_no": spec["order_no"],
+                    "competitor_id": competitor.id,
+                    "paid_on": paid_on,
+                    "campaign": spec.get("campaign"),
+                    "shipping_fee": spec.get("shipping_fee", 0),
+                    "payable_declared": spec.get("payable_declared"),
+                    "items": items,
+                    "discounts": spec.get("discounts") or [],
+                    "refunds": refunds,
+                    "note": spec.get("note"),
+                },
+            )
+            order = db.scalar(select(Order).where(Order.order_no == spec["order_no"]))
+            if order is not None and seed_key and order.seed_key is None:
+                order.seed_key = seed_key
+    db.flush()
+    return db.scalar(select(func.count()).select_from(Order)) or 0
+
+
 def ensure_audit(db) -> None:
     seeds = [
         ("seed-audit-1", "admin@pricewatch.io", "admin", "competitor.create", "competitor", {"code": "dy-muyan"}),
@@ -208,6 +261,7 @@ def seed_all() -> dict:
         skus = ensure_skus(db, dataset["skus"], competitors)
         ensure_rules(db, dataset["rules"], skus)
         ensure_snapshots(db, dataset["snapshots"], skus, competitors, today)
+        orders = ensure_orders(db, dataset.get("orders") or [], skus, competitors, today)
         run = ensure_run(db, today)
         ensure_audit(db)
         db.flush()
@@ -231,6 +285,7 @@ def seed_all() -> dict:
             "snapshots": db.scalar(select(func.count()).select_from(Snapshot)) or 0,
             "skus": db.scalar(select(func.count()).select_from(Sku)) or 0,
             "rules": db.scalar(select(func.count()).select_from(Rule)) or 0,
+            "orders": orders,
             "days": CAPTURE_DAYS,
             "showpiece": SHOWPIECE_CODE,
             "captured_on": today.isoformat(),

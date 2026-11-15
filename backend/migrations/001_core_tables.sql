@@ -155,3 +155,103 @@ CREATE INDEX idx_advices_status ON advices (status);
 CREATE INDEX idx_advices_severity ON advices (severity);
 CREATE INDEX idx_snapshots_day ON snapshots (captured_on);
 CREATE INDEX idx_rules_priority ON rules (priority);
+
+
+-- 订单整单优惠分摊与回款变更（算法 C）
+-- 关键：整单优惠只在 order_discounts 记一次，按货号成交金额分摊到 order_allocations
+CREATE TABLE orders (
+    id                    SERIAL PRIMARY KEY,
+    order_no              VARCHAR(48)  NOT NULL UNIQUE,
+    competitor_id         INTEGER      NOT NULL REFERENCES competitors(id),
+    paid_on               TIMESTAMP    NOT NULL,
+    channel               VARCHAR(24)  NOT NULL DEFAULT 'competitor',
+    campaign              VARCHAR(80)  NOT NULL DEFAULT '',
+    items_total           DOUBLE PRECISION NOT NULL DEFAULT 0,
+    discount_total        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    shipping_fee          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    payable_declared      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    payable_after_refund  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    refunded_total        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    status                VARCHAR(24)  NOT NULL DEFAULT 'paid',
+    reconcile_state       VARCHAR(16)  NOT NULL DEFAULT 'failed',
+    reconcile_checks      JSON,
+    settle                JSON,
+    note                  TEXT,
+    seed_key              VARCHAR(120) UNIQUE,
+    created_at            TIMESTAMP    NOT NULL,
+    updated_at            TIMESTAMP    NOT NULL
+);
+
+CREATE TABLE order_items (
+    id                    SERIAL PRIMARY KEY,
+    order_id              INTEGER      NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    line_no               INTEGER      NOT NULL DEFAULT 1,
+    sku_id                INTEGER      NOT NULL REFERENCES skus(id),
+    sku_code              VARCHAR(48)  NOT NULL DEFAULT '',
+    qty                   INTEGER      NOT NULL DEFAULT 1,
+    unit_price            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    gross_amount          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    discount_allocated    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    net_amount            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    effective_unit_price  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    refunded_qty          INTEGER      NOT NULL DEFAULT 0,
+    refunded_amount       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    remaining_qty         INTEGER      NOT NULL DEFAULT 0,
+    remaining_net         DOUBLE PRECISION NOT NULL DEFAULT 0,
+    legacy_discount       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    legacy_net            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at            TIMESTAMP    NOT NULL,
+    CONSTRAINT uq_order_items_line UNIQUE (order_id, line_no)
+);
+
+CREATE TABLE order_discounts (
+    id              SERIAL PRIMARY KEY,
+    order_id        INTEGER      NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    seq             INTEGER      NOT NULL DEFAULT 1,
+    kind            VARCHAR(32)  NOT NULL DEFAULT 'other',
+    label           VARCHAR(120) NOT NULL DEFAULT '',
+    amount          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    rule            JSON,
+    created_at      TIMESTAMP    NOT NULL,
+    CONSTRAINT uq_order_discounts_seq UNIQUE (order_id, seq)
+);
+
+CREATE TABLE order_allocations (
+    id                SERIAL PRIMARY KEY,
+    order_id          INTEGER      NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    discount_id       INTEGER      NOT NULL REFERENCES order_discounts(id) ON DELETE CASCADE,
+    item_id           INTEGER      NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+    seq               INTEGER      NOT NULL DEFAULT 1,
+    weight            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    amount            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    refunded_amount   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    remaining_amount  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    created_at        TIMESTAMP    NOT NULL,
+    CONSTRAINT uq_allocation_discount_item UNIQUE (discount_id, item_id)
+);
+
+CREATE TABLE refund_events (
+    id              SERIAL PRIMARY KEY,
+    order_id        INTEGER      NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    event_no        VARCHAR(48)  NOT NULL DEFAULT '',
+    arrival_seq     INTEGER      NOT NULL DEFAULT 1,
+    business_seq    INTEGER      NOT NULL DEFAULT 1,
+    kind            VARCHAR(16)  NOT NULL DEFAULT 'item',
+    sku_id          INTEGER      REFERENCES skus(id) ON DELETE SET NULL,
+    sku_code        VARCHAR(48)  NOT NULL DEFAULT '',
+    qty             INTEGER      NOT NULL DEFAULT 0,
+    occurred_at     TIMESTAMP    NOT NULL,
+    amount_declared DOUBLE PRECISION,
+    amount_reversed DOUBLE PRECISION NOT NULL DEFAULT 0,
+    variance        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    state           VARCHAR(12)  NOT NULL DEFAULT 'applied',
+    error           VARCHAR(200),
+    reversal        JSON,
+    note            TEXT,
+    seed_key        VARCHAR(120) UNIQUE,
+    created_at      TIMESTAMP    NOT NULL
+);
+
+CREATE INDEX idx_orders_reconcile ON orders (reconcile_state);
+CREATE INDEX idx_orders_paid_on ON orders (paid_on);
+CREATE INDEX idx_refund_events_order ON refund_events (order_id);

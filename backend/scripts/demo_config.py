@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 DEMO_PASSWORD = "Demo@2026"
 
@@ -328,6 +328,136 @@ def build_dataset() -> dict:
         "skus": skus,
         "rules": RULE_SPECS,
         "snapshots": snapshots,
+        "orders": build_orders(skus),
         "capture_days": CAPTURE_DAYS,
         "run_seed_key": "seed-run-capture-today",
     }
+
+
+# ---- 订单整单优惠分摊样例 ----------------------------------------------------
+
+# 订单样例会覆盖这几个货号；PB-sofa-001 的三天订单让分摊后的券后单价恰好等于
+# 抓价快照券后价 ¥279.00，所以跟价建议数值不变，只是样本口径从快照换成「订单分摊」。
+ORDER_SAMPLE_SKU = "PB-sofa-001"
+ORDER_COMPANION_SKU = "PB-decor-115"  # 同一订单里的第二个货号（同属 dy-muyan，软装只守不降），用来演示整单优惠分摊
+ORDER_LATE_SKU_A = "PB-bed-003"
+ORDER_LATE_SKU_B = "PB-cabinet-009"  # 与 PB-bed-003 同属 jd-yuanmu
+ORDER_FAILED_SKU = "PB-sofa-001"
+
+# 平台跨店券「每满 300 减 30」：整单 897 元 → 只发一张 60 元，不能逐行各抵 60
+CROSS_STORE_RULE = {"per": 300.0, "minus": 30.0, "coupon_count": 1}
+
+
+def _order_price(sku_code: str) -> float:
+    # 固定成交价，保证 seed 幂等；与页面价无关，订单记的是真实成交
+    return {
+        ORDER_SAMPLE_SKU: 299.0,
+        ORDER_COMPANION_SKU: 299.0,
+        ORDER_LATE_SKU_A: 1599.0,
+        ORDER_LATE_SKU_B: 899.0,
+    }.get(sku_code, 299.0)
+
+
+def build_orders(skus: list[dict]) -> list[dict]:
+    """确定性订单样例：整单跨店券分摊、晚到退款回冲、对账失败各一组。"""
+    codes = {sku["sku_code"] for sku in skus}
+    if not all(code in codes for code in (ORDER_SAMPLE_SKU, ORDER_COMPANION_SKU, ORDER_LATE_SKU_A, ORDER_LATE_SKU_B)):
+        return []
+
+    orders = []
+    # ① 三天各一张「沙发 + 茶几」订单：跨店券 ¥60 按成交金额 598:299 分摊成 40:20
+    for day_offset in range(CAPTURE_DAYS):
+        orders.append(
+            {
+                "order_no": f"SO-2618-{day_offset + 1:03d}",
+                "seed_key": f"seed-order-alloc-{day_offset}",
+                "competitor_code": "dy-muyan",
+                "paid_on_offset": day_offset,
+                "paid_hour": 10,
+                "campaign": "618 现货 · 跨店券整单分摊",
+                "shipping_fee": 0.0,
+                "items": [
+                    {"sku_code": ORDER_SAMPLE_SKU, "qty": 2, "unit_price": _order_price(ORDER_SAMPLE_SKU)},
+                    {"sku_code": ORDER_COMPANION_SKU, "qty": 1, "unit_price": _order_price(ORDER_COMPANION_SKU)},
+                ],
+                "discounts": [
+                    {
+                        "seq": 1,
+                        "kind": "platform_cross_store",
+                        "label": "平台跨店券每满300减30 ×2",
+                        "amount": 60.0,
+                        "rule": CROSS_STORE_RULE,
+                    }
+                ],
+                "refunds": [],
+                "note": "整单券只发一张；按成交金额分摊到两个货号。",
+            }
+        )
+
+    # ② 床 + 柜订单：先退 1 件床（业务时间较早），后到「整单退款」事件（业务时间更晚，
+    #   但到达序号反而更大）——按到达顺序处理会算错，必须按业务发生时间回放。
+    orders.append(
+        {
+            "order_no": "SO-2618-004",
+            "seed_key": "seed-order-late-refund",
+            "competitor_code": "jd-yuanmu",
+            "paid_on_offset": 2,
+            "paid_hour": 14,
+            "campaign": "618 现货 · 晚到退款回冲",
+            "shipping_fee": 12.0,
+            "payable_declared": 2498.0 - 120.0 + 12.0,  # 成交 2498 − 跨店券 120 + 运费 12
+            "items": [
+                {"sku_code": ORDER_LATE_SKU_A, "qty": 1, "unit_price": 1599.0},
+                {"sku_code": ORDER_LATE_SKU_B, "qty": 1, "unit_price": 899.0},
+            ],
+            "discounts": [
+                {
+                    "seq": 1,
+                    "kind": "platform_cross_store",
+                    "label": "平台跨店券每满1000减60 ×2",
+                    "amount": 120.0,
+                    "rule": {"per": 1000.0, "minus": 60.0, "coupon_count": 1},
+                }
+            ],
+            "refunds": [
+                # 到达序号 1，业务发生 11-12 18:00：整单剩余全退（晚到事件，回放排到最后）
+                {"event_no": "RF-004-LATE", "kind": "order", "occurred_offset": 0, "occurred_hour": 18, "arrival_seq": 1},
+                # 到达序号 2，业务发生 11-11 09:30：先退 1 件床
+                {
+                    "event_no": "RF-004-EARLY",
+                    "kind": "item",
+                    "sku_code": ORDER_LATE_SKU_A,
+                    "qty": 1,
+                    "occurred_offset": 1,
+                    "occurred_hour": 9,
+                    "arrival_seq": 2,
+                },
+            ],
+            "note": "晚到退款事件按业务发生时间回放：先退床，再整单退剩余。",
+        }
+    )
+
+    # ③ 对账失败样例：平台回传实付与整单口径对不上 → 不能作为跟价可比依据
+    orders.append(
+        {
+            "order_no": "SO-2618-005",
+            "seed_key": "seed-order-reconcile-failed",
+            "competitor_code": "dy-muyan",
+            "paid_on_offset": 0,
+            "paid_hour": 15,
+            "campaign": "618 现货 · 实付对不上样例",
+            "shipping_fee": 0.0,
+            "payable_declared": 500.0,
+            "items": [
+                {"sku_code": ORDER_FAILED_SKU, "qty": 2, "unit_price": 299.0},
+                {"sku_code": ORDER_COMPANION_SKU, "qty": 1, "unit_price": 299.0},
+            ],
+            "discounts": [
+                {"seq": 1, "kind": "platform_cross_store", "label": "平台跨店券每满300减30 ×2", "amount": 60.0, "rule": CROSS_STORE_RULE},
+                {"seq": 2, "kind": "shop_coupon", "label": "店铺券满800减60", "amount": 60.0},
+            ],
+            "refunds": [],
+            "note": "平台回传实付 500 与整单口径 777 对不上：对账闸门拦住，不进跟价样本。",
+        }
+    )
+    return orders

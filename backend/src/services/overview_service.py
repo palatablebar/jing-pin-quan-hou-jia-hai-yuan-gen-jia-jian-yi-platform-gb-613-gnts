@@ -17,6 +17,7 @@ from src.constants.enums import (
 )
 from src.models.advice import Advice
 from src.models.competitor import Competitor
+from src.models.order import Order, RefundEvent
 from src.models.run import Run
 from src.models.sku import Sku
 from src.models.snapshot import Snapshot
@@ -114,6 +115,18 @@ def overview(db: Session) -> dict:
         for advice, sku in top_rows
     ]
 
+    orders_total = db.scalar(select(func.count()).select_from(Order)) or 0
+    orders_passed = (
+        db.scalar(select(func.count()).select_from(Order).where(Order.reconcile_state == "passed")) or 0
+    )
+    orders_failed = orders_total - orders_passed
+    late_refunds = (
+        db.scalar(select(func.count()).select_from(RefundEvent).where(RefundEvent.arrival_seq != RefundEvent.business_seq)) or 0
+    )
+    legacy_gap = 0.0
+    for (settle,) in db.execute(select(Order.settle)).all():
+        legacy_gap += float(((settle or {}).get("totals") or {}).get("legacy_gap", 0.0))
+
     latest_run = db.scalar(select(Run).order_by(Run.id.desc()).limit(1))
     since = utcnow() - timedelta(days=7)
     recent = db.scalars(select(Advice).where(Advice.created_at >= since)).all()
@@ -140,6 +153,11 @@ def overview(db: Session) -> dict:
         "avg_margin_pct": avg_margin,
         "avg_discount_pct": avg_discount,
         "latest_capture_on": latest_day.isoformat() if isinstance(latest_day, date) else None,
+        "orders_total": orders_total,
+        "orders_reconcile_passed": orders_passed,
+        "orders_reconcile_failed": orders_failed,
+        "late_refund_events": late_refunds,
+        "legacy_gap_total": round(legacy_gap, 2),
         "worker_alive": worker_alive(),
         "risk": [
             {"key": key, "label": RISK_LABELS.get(key, key), "count": risk_map.get(key, 0)}

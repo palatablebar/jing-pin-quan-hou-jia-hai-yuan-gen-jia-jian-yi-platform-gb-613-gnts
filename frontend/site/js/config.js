@@ -21,8 +21,9 @@ export const NAV = [
   { to: '#/overview', no: '01', label: '总览', permission: 'overview:read' },
   { to: '#/catalog', no: '02', label: '竞品与 SKU', permission: 'sku:read' },
   { to: '#/snapshots', no: '03', label: '抓价快照', permission: 'snapshot:read' },
-  { to: '#/advices', no: '04', label: '跟价建议', permission: 'advice:read' },
-  { to: '#/exports', no: '05', label: '导出与审计', permission: 'overview:read' },
+  { to: '#/orders', no: '04', label: '订单与对账', permission: 'order:read' },
+  { to: '#/advices', no: '05', label: '跟价建议', permission: 'advice:read' },
+  { to: '#/exports', no: '06', label: '导出与审计', permission: 'overview:read' },
 ];
 
 export const ROLE_LABELS = {
@@ -40,10 +41,11 @@ export const PERMISSIONS = {
     'snapshot:read',
     'run:read', 'run:create',
     'advice:read', 'advice:decide',
+    'order:read', 'order:write',
     'export:read', 'audit:read',
   ],
-  analyst: ['overview:read', 'competitor:read', 'sku:read', 'rule:read', 'snapshot:read', 'run:read', 'run:create', 'advice:read'],
-  viewer: ['overview:read', 'competitor:read', 'sku:read', 'rule:read', 'snapshot:read', 'run:read', 'advice:read'],
+  analyst: ['overview:read', 'competitor:read', 'sku:read', 'rule:read', 'snapshot:read', 'run:read', 'run:create', 'advice:read', 'order:read'],
+  viewer: ['overview:read', 'competitor:read', 'sku:read', 'rule:read', 'snapshot:read', 'run:read', 'advice:read', 'order:read'],
 };
 
 /* 共享枚举：与 backend/src/constants/enums.py 同步（README「共享枚举出现位置」） */
@@ -82,6 +84,24 @@ export const ENUMS = {
     follow: '跟价下调',
     hold: '维持不动',
     raise: '回调上行',
+  },
+  orderStatus: {
+    paid: '已成交',
+    partially_refunded: '部分退款',
+    refunded: '已全额退款',
+  },
+  reconcile: {
+    passed: '对账通过',
+    failed: '对账不通过',
+  },
+  refundKind: {
+    item: '按货号退件',
+    order: '整单全退',
+    shipping: '退运费',
+  },
+  sampleBasis: {
+    order: '订单分摊券后价',
+    snapshot: '抓价快照券后价',
   },
   runStatus: {
     queued: '排队中',

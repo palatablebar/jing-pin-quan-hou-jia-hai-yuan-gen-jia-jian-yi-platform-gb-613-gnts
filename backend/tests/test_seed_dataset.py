@@ -102,3 +102,43 @@ def test_rule_scope_priority_order():
     assert match_rule(rules, _sku_object(decor), decor["competitor_code"]).code == "rule-decor-hold"
     other = next(item for item in demo["skus"] if item["category"] == "bed" and item["competitor_code"] == "wd-nanmu")
     assert match_rule(rules, _sku_object(other), "wd-nanmu").code == "rule-global"
+
+
+def test_order_samples_settle_and_gate_comparability():
+    """订单样例：整单分摊对账通过、晚到退款按业务时间回放、失败单被闸门拦住。"""
+    from src.services.order_allocation import settle_order
+
+    dataset = build_dataset()
+    orders = dataset["orders"]
+    assert len(orders) == 5
+    settled = {}
+    for order in orders:
+        settled[order["order_no"]] = settle_order(
+            shipping_fee=order.get("shipping_fee") or 0,
+            payable_declared=order.get("payable_declared"),
+            items=[{**item, "line_no": index + 1} for index, item in enumerate(order["items"])],
+            discounts=order["discounts"],
+            refunds=[
+                {**refund, "occurred_at": f"2026-11-15T{refund.get('occurred_hour', 10):02d}:00:00"}
+                for refund in order.get("refunds") or []
+            ],
+        )
+    allocation_orders = [settled[order["order_no"]] for order in orders[:3]]
+    for result in allocation_orders:
+        assert result["reconcile_state"] == "passed"
+        assert result["totals"]["discount_total"] == 60.0
+        assert result["totals"]["legacy_gap"] == -60.0
+        assert {row["sku_code"]: row["discount_allocated"] for row in result["items"]} == {
+            "PB-sofa-001": 40.0,
+            "PB-decor-115": 20.0,
+        }
+
+    late = settled["SO-2618-004"]
+    assert late["reconcile_state"] == "passed"
+    assert [row["event_no"] for row in late["refunds"]] == ["RF-004-EARLY", "RF-004-LATE"]
+    assert late["totals"]["refunded_total"] == 2378.0
+    assert late["status"] == "refunded"
+
+    failed = settled["SO-2618-005"]
+    assert failed["reconcile_state"] == "failed"
+    assert "payable_declared" in {row["key"] for row in failed["checks"] if not row["passed"]}

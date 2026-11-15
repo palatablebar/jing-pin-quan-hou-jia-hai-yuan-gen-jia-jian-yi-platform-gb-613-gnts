@@ -6,6 +6,7 @@ import loginPage from './pages/login.js';
 import overviewPage from './pages/overview.js';
 import catalogPage from './pages/catalog.js';
 import snapshotsPage from './pages/snapshots.js';
+import ordersPage from './pages/orders.js';
 import advicesPage from './pages/advices.js';
 import exportsPage from './pages/exports.js';
 
@@ -13,6 +14,7 @@ const routes = [
   { path: '#/overview', page: overviewPage, permission: 'overview:read' },
   { path: '#/catalog', page: catalogPage, permission: 'sku:read' },
   { path: '#/snapshots', page: snapshotsPage, permission: 'snapshot:read' },
+  { path: '#/orders', page: ordersPage, permission: 'order:read' },
   { path: '#/advices', page: advicesPage, permission: 'advice:read' },
   { path: '#/exports', page: exportsPage, permission: 'overview:read' },
 ];

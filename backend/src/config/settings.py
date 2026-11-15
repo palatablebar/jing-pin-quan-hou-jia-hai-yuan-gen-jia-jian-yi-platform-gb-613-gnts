@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     app_name: str = "pricewatch"
     app_title: str = "竞品券后价还原与跟价建议台"
 
-    db_kind: str = "postgres"  # postgres | mysql
+    db_kind: str = "postgres"  # postgres | mysql | sqlite
     db_host: str = "localhost"
     db_port: int = 5432
     db_name: str = "pricewatch"
@@ -31,6 +31,9 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        if self.db_kind == "sqlite":
+            # 仅用于本地测试/演练；生产仍走 PostgreSQL
+            return self.db_name if self.db_name.startswith("sqlite") else f"sqlite:///{self.db_name}"
         if self.db_kind == "mysql":
             return (
                 f"mysql+pymysql://{self.db_user}:{self.db_password}"

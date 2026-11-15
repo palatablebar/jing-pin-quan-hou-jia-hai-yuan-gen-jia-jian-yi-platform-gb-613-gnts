@@ -58,3 +58,51 @@ def runs_csv(db: Session, principal: dict, request: Request) -> Response:
     )
     db.commit()
     return _respond(content, "pricewatch-runs.csv")
+
+
+def allocations_csv(db: Session, order_id: int | None, principal: dict, request: Request) -> Response:
+    content = export_service.allocations_csv(db, order_id)
+    audit_service.record(
+        db,
+        actor_email=principal["email"],
+        actor_role=principal["role"],
+        action="export.allocations",
+        entity="order",
+        entity_id=order_id,
+        detail={"bytes": len(content)},
+        ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _respond(content, "pricewatch-order-allocations.csv")
+
+
+def refunds_csv(db: Session, order_id: int | None, principal: dict, request: Request) -> Response:
+    content = export_service.refunds_csv(db, order_id)
+    audit_service.record(
+        db,
+        actor_email=principal["email"],
+        actor_role=principal["role"],
+        action="export.refunds",
+        entity="order",
+        entity_id=order_id,
+        detail={"bytes": len(content)},
+        ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _respond(content, "pricewatch-refunds.csv")
+
+
+def reconciliations_csv(db: Session, principal: dict, request: Request) -> Response:
+    content = export_service.reconciliations_csv(db)
+    audit_service.record(
+        db,
+        actor_email=principal["email"],
+        actor_role=principal["role"],
+        action="export.reconciliations",
+        entity="order",
+        entity_id=None,
+        detail={"bytes": len(content)},
+        ip=request.client.host if request.client else None,
+    )
+    db.commit()
+    return _respond(content, "pricewatch-reconciliations.csv")

@@ -57,6 +57,8 @@ export const overviewPage = {
         ${kpiTag({ label: '待审批建议', value: data.pending_total, suffix: '条', hint: `累计 ${data.advices_total} 条`, tone: 'accent' })}
         ${kpiTag({ label: '高风险', value: data.high_risk_total, suffix: '条', hint: '破底价或毛利 < 5%', tone: data.high_risk_total ? 'danger' : '' })}
         ${kpiTag({ label: '平均价差', value: signedPct(data.avg_gap_pct), suffix: '', hint: `平均建议毛利 ${Number(data.avg_margin_pct).toFixed(2)}%`, tone: 'zinc' })}
+        ${kpiTag({ label: '订单对账', value: `${data.orders_reconcile_passed}/${data.orders_total}`, suffix: '张', hint: `不通过 ${data.orders_reconcile_failed} 张不进跟价样本`, tone: data.orders_reconcile_failed ? 'danger' : '' })}
+        ${kpiTag({ label: '晚到退款', value: data.late_refund_events, suffix: '条', hint: '已按业务发生时间重放回冲', tone: 'zinc' })}
       </section>
 
       <div class="grid-2">

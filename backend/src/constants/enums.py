@@ -160,3 +160,91 @@ COUPON_KIND_LABELS: dict[str, str] = {
     CouponKind.PLATFORM_COUPON.value: "平台券",
     CouponKind.MEMBER_DISCOUNT.value: "会员折扣",
 }
+
+
+class OrderDiscountKind(StrEnum):
+    """订单整单优惠类型（按业务顺序逐笔分摊到货号）。"""
+
+    PLATFORM_CROSS_STORE = "platform_cross_store"  # 平台跨店券：整单门槛只发一张，绝不能逐行全额抵
+    SHOP_COUPON = "shop_coupon"  # 店铺券（整单）
+    FULL_REDUCTION = "full_reduction"  # 满减（整单）
+    MEMBER = "member"  # 会员立减/折扣（整单）
+    OTHER = "other"
+
+
+ORDER_DISCOUNT_KIND_LABELS: dict[str, str] = {
+    OrderDiscountKind.PLATFORM_CROSS_STORE.value: "平台跨店券",
+    OrderDiscountKind.SHOP_COUPON.value: "店铺券",
+    OrderDiscountKind.FULL_REDUCTION.value: "满减",
+    OrderDiscountKind.MEMBER.value: "会员优惠",
+    OrderDiscountKind.OTHER.value: "其他整单优惠",
+}
+
+
+class OrderStatus(StrEnum):
+    """订单履约/回款状态（由回冲后的剩余件数推导）。"""
+
+    PAID = "paid"
+    PARTIALLY_REFUNDED = "partially_refunded"
+    REFUNDED = "refunded"
+
+
+ORDER_STATUS_LABELS: dict[str, str] = {
+    OrderStatus.PAID.value: "已成交",
+    OrderStatus.PARTIALLY_REFUNDED.value: "部分退款",
+    OrderStatus.REFUNDED.value: "已全额退款",
+}
+
+
+class ReconcileState(StrEnum):
+    """整单分摊与订单实付对账结论；只有 passed 的订单才能作为可比依据。"""
+
+    PASSED = "passed"
+    FAILED = "failed"
+
+
+RECONCILE_STATE_LABELS: dict[str, str] = {
+    ReconcileState.PASSED.value: "对账通过",
+    ReconcileState.FAILED.value: "对账不通过",
+}
+
+
+class OrderRefundKind(StrEnum):
+    """回款变更（退款事件）类型。"""
+
+    ITEM = "item"  # 按货号退件
+    ORDER = "order"  # 整单剩余全退
+    SHIPPING = "shipping"  # 只退运费
+
+
+ORDER_REFUND_KIND_LABELS: dict[str, str] = {
+    OrderRefundKind.ITEM.value: "按货号退件",
+    OrderRefundKind.ORDER.value: "整单全退",
+    OrderRefundKind.SHIPPING.value: "退运费",
+}
+
+
+class RefundEventState(StrEnum):
+    """退款事件回放结果。"""
+
+    APPLIED = "applied"
+    INVALID = "invalid"
+
+
+REFUND_EVENT_STATE_LABELS: dict[str, str] = {
+    RefundEventState.APPLIED.value: "已回冲",
+    RefundEventState.INVALID.value: "未回冲",
+}
+
+
+class SampleBasis(StrEnum):
+    """跟价建议的可比价格来源。"""
+
+    ORDER = "order"  # 已对账订单按货号成交金额分摊整单优惠后的券后单价
+    SNAPSHOT = "snapshot"  # 回退到 RPA 抓价快照的券后单件价
+
+
+SAMPLE_BASIS_LABELS: dict[str, str] = {
+    SampleBasis.ORDER.value: "订单分摊券后价",
+    SampleBasis.SNAPSHOT.value: "抓价快照券后价",
+}

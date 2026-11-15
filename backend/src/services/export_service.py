@@ -1,6 +1,8 @@
 """导出服务：跟价建议清单 / 券后价快照 CSV（两个算法的结果都进导出）。"""
 from __future__ import annotations
 
+from datetime import timedelta
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,12 +14,25 @@ from src.constants.enums import (
     RUN_STATUS_LABELS,
     TRIGGER_LABELS,
 )
+from src.config.settings import settings
 from src.models.advice import Advice
 from src.models.competitor import Competitor
+from src.models.order import Order, OrderAllocation, OrderDiscount, OrderItem, RefundEvent
 from src.models.run import Run
 from src.models.sku import Sku
 from src.models.snapshot import Snapshot
 from src.utils.csv_export import to_csv
+
+
+def _r2(value) -> str:
+    return f"{float(value):.2f}"
+
+
+def _local(dt) -> str:
+    """库里存 UTC naive，导出按业务时区（默认 UTC+8）展示。"""
+    if not dt:
+        return ""
+    return (dt + timedelta(minutes=settings.app_timezone_offset_minutes)).strftime("%Y-%m-%d %H:%M")
 
 
 def _coupon_text(snapshot_fields: dict) -> str:
@@ -161,4 +176,117 @@ def runs_csv(db: Session) -> bytes:
         ]
         for run in runs
     ]
+    return to_csv(headers, rows)
+
+
+def allocations_csv(db: Session, order_id: int | None = None) -> bytes:
+    """订单整单优惠分摊明细：每笔优惠 × 每个货号一行，可直接对账。"""
+    stmt = (
+        select(Order, OrderItem, OrderDiscount, OrderAllocation)
+        .join(OrderItem, OrderItem.order_id == Order.id)
+        .join(OrderAllocation, OrderAllocation.item_id == OrderItem.id)
+        .join(OrderDiscount, OrderDiscount.id == OrderAllocation.discount_id)
+        .order_by(Order.paid_on, Order.id, OrderItem.line_no, OrderDiscount.seq)
+    )
+    if order_id:
+        stmt = stmt.where(Order.id == order_id)
+    headers = [
+        "订单号", "成交时间", "竞品店铺", "货号", "件数", "成交单价", "成交金额",
+        "优惠顺序", "整单优惠类型", "整单优惠说明", "整单优惠金额",
+        "分摊权重（成交金额）", "分摊到本行", "本行券后净额", "券后单价",
+        "已回冲", "剩余分摊", "对账状态",
+    ]
+    rows = []
+    for order, item, discount, alloc in db.execute(stmt).all():
+        competitor = db.get(Competitor, order.competitor_id)
+        rows.append(
+            [
+                order.order_no,
+                _local(order.paid_on),
+                competitor.name if competitor else "",
+                item.sku_code,
+                item.qty,
+                _r2(item.unit_price),
+                _r2(item.gross_amount),
+                discount.seq,
+                discount.kind,
+                discount.label,
+                _r2(discount.amount),
+                _r2(alloc.weight),
+                _r2(alloc.amount),
+                _r2(item.net_amount),
+                _r2(item.effective_unit_price),
+                _r2(alloc.refunded_amount),
+                _r2(alloc.remaining_amount),
+                order.reconcile_state,
+            ]
+        )
+    return to_csv(headers, rows)
+
+
+def refunds_csv(db: Session, order_id: int | None = None) -> bytes:
+    """回款变更流水：按业务发生时间排序，标出到达顺序与业务顺序的差异。"""
+    stmt = select(Order, RefundEvent).join(RefundEvent, RefundEvent.order_id == Order.id)
+    if order_id:
+        stmt = stmt.where(Order.id == order_id)
+    stmt = stmt.order_by(Order.paid_on, Order.id, RefundEvent.business_seq, RefundEvent.id)
+    headers = [
+        "订单号", "退款事件号", "类型", "货号", "件数", "业务发生时间",
+        "到达序号", "业务顺序", "晚到", "回款流水实退", "按分摊口径回冲", "差额",
+        "回放结果", "未回放原因", "对账状态",
+    ]
+    rows = []
+    for order, event in db.execute(stmt).all():
+        rows.append(
+            [
+                order.order_no,
+                event.event_no,
+                event.kind,
+                event.sku_code,
+                event.qty,
+                _local(event.occurred_at),
+                event.arrival_seq,
+                event.business_seq,
+                "是" if event.arrival_seq != event.business_seq else "否",
+                "" if event.amount_declared is None else _r2(event.amount_declared),
+                _r2(event.amount_reversed),
+                _r2(event.variance),
+                event.state,
+                event.error or "",
+                order.reconcile_state,
+            ]
+        )
+    return to_csv(headers, rows)
+
+
+def reconciliations_csv(db: Session) -> bytes:
+    """整单对账报表：订单实付 vs 逐行分摊 vs 回冲，附旧口径偏差。"""
+    headers = [
+        "订单号", "成交时间", "竞品店铺", "状态", "商品成交额", "整单优惠合计",
+        "运费", "订单实付", "已回冲", "回冲后应付", "剩余净额", "剩余件数",
+        "旧口径逐行抵扣合计", "旧口径偏差", "对账结论",
+    ]
+    rows = []
+    for order in db.scalars(select(Order).order_by(Order.paid_on, Order.id)).all():
+        competitor = db.get(Competitor, order.competitor_id)
+        totals = (order.settle or {}).get("totals") or {}
+        rows.append(
+            [
+                order.order_no,
+                _local(order.paid_on),
+                competitor.name if competitor else "",
+                order.status,
+                _r2(order.items_total),
+                _r2(order.discount_total),
+                _r2(order.shipping_fee),
+                _r2(order.payable_declared),
+                _r2(order.refunded_total),
+                _r2(order.payable_after_refund),
+                _r2(totals.get("remaining_net", 0)),
+                totals.get("remaining_qty", 0),
+                _r2(totals.get("legacy_discount_total", 0)),
+                _r2(totals.get("legacy_gap", 0)),
+                order.reconcile_state,
+            ]
+        )
     return to_csv(headers, rows)

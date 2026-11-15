@@ -15,5 +15,11 @@ ACTIONS: dict[str, str] = {
     "advice.decide": "审批跟价建议",
     "export.advices": "导出跟价建议",
     "export.snapshots": "导出券后价快照",
+    "export.allocations": "导出整单分摊明细",
+    "export.refunds": "导出回款变更流水",
+    "export.reconciliations": "导出整单对账报表",
+    "order.capture": "订单入库结算",
+    "order.refund": "追加回款变更",
+    "order.resettle": "重跑订单对账",
     "http.mutation": "写请求",
 }
